@@ -1,0 +1,194 @@
+{
+  "name": "JE - Pedido recebido via WhatsApp",
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "id": "webhook-entrada",
+      "name": "WhatsApp - mensagem recebida",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-600, 0],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "je-pedido-whatsapp",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "notes": "URL da Avisa API (ou outro provedor) precisa apontar para este webhook. Ajuste os nomes de campo no node seguinte conforme o payload real do provedor."
+    },
+    {
+      "id": "extrair-dados",
+      "name": "Extrair telefone e mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-380, 0],
+      "parameters": {
+        "jsCode": "// Ajuste os campos abaixo conforme o payload real do webhook da Avisa API.\nconst body = $input.first().json.body ?? $input.first().json;\nreturn [{\n  json: {\n    telefone: body.number ?? body.telefone ?? body.from,\n    mensagem: body.message ?? body.mensagem ?? body.text,\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "ia-extrai-itens",
+      "name": "IA - Extrair itens do pedido",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-160, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"gpt-4o-mini\",\n  response_format: { type: \"json_object\" },\n  messages: [\n    { role: \"system\", content: \"Você extrai pedidos de bebidas/alimentos de mensagens de WhatsApp em português. Responda APENAS com um JSON no formato {\\\"itens\\\": [{\\\"nome\\\": string, \\\"quantidade\\\": number}]}. Exemplo: mensagem 'quero 2 heineken lata e uma coca 2 litros' -> {\\\"itens\\\":[{\\\"nome\\\":\\\"heineken lata\\\",\\\"quantidade\\\":2},{\\\"nome\\\":\\\"coca 2 litros\\\",\\\"quantidade\\\":1}]}\" },\n    { role: \"user\", content: $json.mensagem }\n  ]\n}) }}"
+      },
+      "notes": "Credencial httpHeaderAuth: Authorization = Bearer <OPENAI_API_KEY>."
+    },
+    {
+      "id": "parsear-resposta-ia",
+      "name": "Parsear resposta da IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [60, 0],
+      "parameters": {
+        "jsCode": "const conteudo = $input.first().json.choices[0].message.content;\nconst dados = JSON.parse(conteudo);\nreturn [{ json: { telefone: $('Extrair telefone e mensagem').first().json.telefone, itensPedidos: dados.itens ?? [] } }];\n"
+      }
+    },
+    {
+      "id": "buscar-catalogo",
+      "name": "Buscar catálogo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.APP_BASE_URL }}/api/produtos"
+      },
+      "notes": "APP_BASE_URL = URL pública do site (ex: https://jealimentos.seudominio.com)."
+    },
+    {
+      "id": "casar-itens",
+      "name": "Casar itens com o catálogo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 0],
+      "parameters": {
+        "jsCode": "const produtos = $input.first().json.produtos;\nconst { telefone, itensPedidos } = $('Parsear resposta da IA').first().json;\n\nfunction normalizar(t) {\n  return t.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n}\n\nconst itens = [];\nconst naoEncontrados = [];\n\nfor (const item of itensPedidos) {\n  const alvo = normalizar(item.nome);\n  const produto = produtos.find((p) => normalizar(p.nome).includes(alvo) || alvo.includes(normalizar(p.nome)));\n  if (produto) {\n    itens.push({ produto_id: produto.id, quantidade: item.quantidade });\n  } else {\n    naoEncontrados.push(item.nome);\n  }\n}\n\nreturn [{ json: { telefone, itens, naoEncontrados } }];\n"
+      }
+    },
+    {
+      "id": "identificar-cliente",
+      "name": "Identificar cliente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.APP_BASE_URL }}/api/clientes/identificar",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ telefone: $json.telefone }) }}"
+      }
+    },
+    {
+      "id": "cliente-existe",
+      "name": "Cliente já cadastrado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [940, 0],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.existe }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "criar-pedido",
+      "name": "Criar pedido",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, -100],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.APP_BASE_URL }}/api/pedidos",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ telefone: $('Casar itens com o catálogo').first().json.telefone, itens: $('Casar itens com o catálogo').first().json.itens }) }}"
+      }
+    },
+    {
+      "id": "enviar-pix",
+      "name": "Enviar Pix via Avisa API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1380, -100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.avisaapi.com.br/api/actions/sendMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $('Casar itens com o catálogo').first().json.telefone, message: `Pedido registrado! Total: R$ ${$json.total.toFixed(2)}.\\n\\nPix Copia e Cola:\\n${$json.pix_copia_cola}\\n\\nApós pagar, envie o comprovante aqui mesmo para confirmarmos.` }) }}"
+      },
+      "notes": "Credencial httpHeaderAuth: Authorization = <AVISA_API_KEY>."
+    },
+    {
+      "id": "pedir-cadastro",
+      "name": "Pedir cadastro pelo site",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.avisaapi.com.br/api/actions/sendMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $('Casar itens com o catálogo').first().json.telefone, message: 'Ainda não encontrei seu cadastro. Finalize seu primeiro pedido pelo nosso site para cadastrar seu nome, é rápido: ' + $env.APP_BASE_URL + '/catalogo' }) }}"
+      },
+      "notes": "Simplificação: cadastro de nome por WhatsApp exigiria manter estado de conversa (fora do escopo inicial). Direciona o cliente novo para se cadastrar pelo site no primeiro pedido."
+    }
+  ],
+  "connections": {
+    "WhatsApp - mensagem recebida": {
+      "main": [[{ "node": "Extrair telefone e mensagem", "type": "main", "index": 0 }]]
+    },
+    "Extrair telefone e mensagem": {
+      "main": [[{ "node": "IA - Extrair itens do pedido", "type": "main", "index": 0 }]]
+    },
+    "IA - Extrair itens do pedido": {
+      "main": [[{ "node": "Parsear resposta da IA", "type": "main", "index": 0 }]]
+    },
+    "Parsear resposta da IA": {
+      "main": [[{ "node": "Buscar catálogo", "type": "main", "index": 0 }]]
+    },
+    "Buscar catálogo": {
+      "main": [[{ "node": "Casar itens com o catálogo", "type": "main", "index": 0 }]]
+    },
+    "Casar itens com o catálogo": {
+      "main": [[{ "node": "Identificar cliente", "type": "main", "index": 0 }]]
+    },
+    "Identificar cliente": {
+      "main": [[{ "node": "Cliente já cadastrado?", "type": "main", "index": 0 }]]
+    },
+    "Cliente já cadastrado?": {
+      "main": [
+        [{ "node": "Criar pedido", "type": "main", "index": 0 }],
+        [{ "node": "Pedir cadastro pelo site", "type": "main", "index": 0 }]
+      ]
+    },
+    "Criar pedido": {
+      "main": [[{ "node": "Enviar Pix via Avisa API", "type": "main", "index": 0 }]]
+    }
+  }
+}

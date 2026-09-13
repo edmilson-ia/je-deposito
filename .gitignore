@@ -1,0 +1,18 @@
+node_modules/
+dist/
+dist-server/
+.output/
+.vinxi/
+.tanstack/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+
+# Anotações pessoais com credenciais em texto puro — nunca commitar
+EDMILSON CESTA_BASICA.txt
+
+# Configurações locais do Claude Code (não fazem parte do app)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
