@@ -1,5 +1,7 @@
 # J.E Alimentos e Destilados — Catálogo digital e vendas
 
+Em resumo: catálogo digital de bebidas com carrinho, pedidos com Pix e painel admin. Usa React, backend em Express, banco Supabase e automação com n8n, e o catálogo pode ser editado por uma planilha do Google Sheets.
+
 Catálogo digital + carrinho + pedidos com Pix + painel admin, construído seguindo a skill
 `deposito-bebidas-app` (veja `.claude/skills/deposito-bebidas-app/SKILL.md`).
 
